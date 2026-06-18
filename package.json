@@ -1,0 +1,15 @@
+{
+  "name": "browser-research",
+  "version": "1.0.0",
+  "description": "A Claude Code skill that researches a target — a web page, the open browser tab, pasted text, a live URL, and/or the local codebase — and captures the findings as a structured Markdown report.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "playwright-core": "^1.61.0"
+  }
+}
