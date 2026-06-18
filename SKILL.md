@@ -68,6 +68,7 @@ Use this when the goal is to capture *everything* on a single page — every ele
 
 ### Hard rules
 
+- **No assumptions — mandatory.** The report contains **only** what was actually observed or captured. Never write inferred behaviour, conventional defaults (e.g. "the logo links home"), or expected-but-unseen items as fact. If something was not verified, it goes under **Open Questions** as unverified — it does **not** appear as a finding. Every claim must trace to captured output in `tools/out/`.
 - **This page only.** Stay on the target route. Do **not** explore other pages.
   - Nav/links to other routes: **read the `href`** to record where they point — no click.
   - Router-only links (no `href`): click → record resulting URL → **browser back** (`page.goBack()`) → confirm you returned.
