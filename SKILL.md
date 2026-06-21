@@ -143,6 +143,10 @@ All read-only — observe and learn, never edit. The running app defaults to `ht
   intercept clicks ("element intercepts pointer events"). Dismiss it (Escape, "Done", "Don't Show Again")
   before interacting — then note it as a captured feature.
 - **Static snapshots are not enough — drive the DEPTH checklist below** before declaring a screen mapped.
+- **Everything must be reusable.** Every component, cell renderer, and UI element built in
+  `projects/itp/app/webclient` must be reusable across screens — never page-specific. If it
+  can't be reused, it's inline markup, not a component. Check `projects/itp/skills/` first;
+  write the skill if missing; then build the component.
 - **A feature is not "mapped" until the Coverage Oracle runs** (capture→manifest→reconcile→report) and the
   residual gap list is recorded. Never claim "captured everything" without a `coverage.md`. The server config
   is the denominator — hidden columns/tabs/widgets the DOM never renders are real gaps and must surface.
