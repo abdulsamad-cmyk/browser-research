@@ -224,6 +224,18 @@ in any source not driven/captured. Run these scripts (from `tools/`, Chrome on C
 5. **Report** — `node tools/coverage-report.js` emits `out/coverage.json` + `out/coverage.md`
    (headline % = driven÷declared, residual gap table with a reason per row).
 
+### Stage F — Auto-seed dual-verify (runs automatically after Stage E)
+
+After `coverage-report.js` writes `coverage.md`, if the residual list is non-empty, Stage F runs automatically — no user prompt needed.
+
+1. Run `node tools/stage-f-seed.js` — reads `coverage.json` residual gaps and writes a dual-verify seed prompt to `out/dual-verify-seed.md`.
+2. Invoke `/dual-verify-orchestrator` with `out/dual-verify-seed.md` as the seed. **Mode 2 — autonomous. No questions. Decide from evidence.**
+3. The orchestrator's A↔B loop answers each gap from the webclient source, updates `CONTEXT.md`, resolves CONFLICTs only if genuine.
+4. Output: `out/coverage-enriched.md` (gaps resolved + code evidence + domain context).
+5. **STOP.** Surface `coverage-enriched.md` to the user. Do not build anything. Do not propose fixes. The user decides what to build next.
+
+**What Stage F never does:** asks which approach to take, asks permission to run, asks "shall I start now or later?" — those are Mode 2 violations. Decide from evidence; log the decision; proceed.
+
 **Gotchas learned (Orbitax platform-tool):** enter the tool via the launcher solution every time (a
 warm tab-click or URL-restore reuses cached columns and won't re-fire `fieldSections`); attach the
 network listener BEFORE any reload; the grid's full column set is in `fieldSections`, NOT the rendered
