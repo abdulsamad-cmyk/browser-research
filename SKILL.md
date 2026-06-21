@@ -218,7 +218,9 @@ in any source not driven/captured. Run these scripts (from `tools/`, Chrome on C
 4. **Map + critic (parallel read-only agents, no browser)** — one agent per feature maps each declared
    element to a component `path:line` (source 3 = code) and flags declared-but-no-code /
    code-but-not-declared; one critic agent answers "what's missing?". Agents write `out/findings-*.md`.
-   The browser stays serial; agents never drive it.
+   The browser stays serial; agents never drive it. Run `node tools/stage-d.js` to generate
+   ready-to-paste agent prompts in `out/agent-prompts/`. Dispatch each printed agent; collect their
+   `findings-*.md` outputs; `coverage-report.js` folds them in automatically.
 5. **Report** — `node tools/coverage-report.js` emits `out/coverage.json` + `out/coverage.md`
    (headline % = driven÷declared, residual gap table with a reason per row).
 

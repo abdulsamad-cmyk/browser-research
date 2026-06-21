@@ -24,29 +24,45 @@ const tagFor = u => /FilingManagerApi|fieldSections|graphql/i.test(u) ? 'fieldSe
   await page.waitForLoadState('networkidle',{timeout:30000}).catch(()=>{});
   await page.waitForTimeout(3000);
 
-  // 2. ALWAYS enter via launcher -> "Filing Manager" solution: this mints a fresh COLD tool load,
-  //    which is what fires the tool's fieldSections (column defs). Restoring the URL reuses cached columns.
-  await page.locator('button[aria-label="Apps launcher"], button:has(i.fa-grid)').first().click({timeout:5000}).catch(()=>{});
-  await page.waitForTimeout(1500);
-  const sol = page.getByText(/^Filing Manager$/).first();
-  if (await sol.count().catch(()=>0)) await sol.click({timeout:5000}).catch(()=>{});
-  await page.waitForTimeout(5000);
-  await page.keyboard.press('Escape').catch(()=>{});
-  await page.locator('button:has-text("Done"), button:has-text("Don\'t Show Again")').first().click({timeout:2000}).catch(()=>{});
-  await page.waitForTimeout(1000);
-
-  // 3. optional sub-tab to force its fieldSections/grid load.
-  //    Switch via a sibling tab FIRST so the target reloads fresh (clicking the already-active tab won't re-fetch).
   const target = process.argv[2];
-  if (target) {
-    const sibling = target === 'Dashboard' ? 'Library' : 'Dashboard';
-    const sib = page.locator(`a[title="${sibling}"]`).first();
-    if (await sib.count().catch(()=>0)) { await sib.click({timeout:6000}).catch(()=>{}); await page.waitForTimeout(3000); }
-    const t = page.locator(`a[title="${target}"]`).first();
-    if (await t.count().catch(()=>0)) await t.click({timeout:6000}).catch(()=>{});
+  const fieldSectionsCount = () => captured.filter(c => /FilingManagerApi|fieldSections|graphql/i.test(c.url)).length;
+
+  // navSequence: launcher -> Filing Manager solution -> dismiss dialog -> sibling tab -> target tab.
+  // Each call mints a fresh COLD tool load (fires fieldSections). settleWait controls the final pause.
+  async function navSequence(settleWait) {
+    await page.locator('button[aria-label="Apps launcher"], button:has(i.fa-grid)').first().click({timeout:5000}).catch(()=>{});
+    await page.waitForTimeout(1500);
+    const sol = page.getByText(/^Filing Manager$/).first();
+    if (await sol.count().catch(()=>0)) await sol.click({timeout:5000}).catch(()=>{});
+    await page.waitForTimeout(5000);
+    await page.keyboard.press('Escape').catch(()=>{});
+    await page.locator('button:has-text("Done"), button:has-text("Don\'t Show Again")').first().click({timeout:2000}).catch(()=>{});
+    await page.waitForTimeout(1000);
+    if (target) {
+      const sibling = target === 'Dashboard' ? 'Library' : 'Dashboard';
+      const sib = page.locator(`a[title="${sibling}"]`).first();
+      if (await sib.count().catch(()=>0)) { await sib.click({timeout:6000}).catch(()=>{}); await page.waitForTimeout(3000); }
+      const t = page.locator(`a[title="${target}"]`).first();
+      if (await t.count().catch(()=>0)) await t.click({timeout:6000}).catch(()=>{});
+    }
+    await page.waitForLoadState('networkidle',{timeout:20000}).catch(()=>{});
+    await page.waitForTimeout(settleWait);
+    await Promise.allSettled(pending.slice()); // await any bodies triggered this attempt
   }
-  await page.waitForLoadState('networkidle',{timeout:20000}).catch(()=>{});
-  await page.waitForTimeout(6000);
+
+  // First attempt (current behavior on happy path).
+  await navSequence(6000);
+
+  // Retry up to 3 times if fieldSections still not captured (warm-cache race or cold-boot timing miss).
+  const RETRY_WAITS = [3000, 5000, 8000];
+  for (let attempt = 0; attempt < RETRY_WAITS.length && fieldSectionsCount() === 0; attempt++) {
+    console.warn(`RETRY fieldSections (attempt ${attempt+1}/${RETRY_WAITS.length}) — 0 captured so far for "${target || '(no target)'}"`);
+    await navSequence(RETRY_WAITS[attempt]);
+  }
+  if (fieldSectionsCount() === 0) {
+    console.warn(`WARN: retries exhausted — 0 fieldSections captured for "${target || '(no target)'}". Coverage Oracle will lack column defs.`);
+  }
+
   await Promise.allSettled(pending);
 
   let i=0; for (const c of captured) fs.writeFileSync(path.join(OUT,`${tagFor(c.url)}-${i++}.json`), JSON.stringify(c,null,2));
