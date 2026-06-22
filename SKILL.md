@@ -268,13 +268,56 @@ After `coverage-report.js` writes `coverage.md`, if the residual list is non-emp
 **What Stage F never does:** asks which approach to take, asks permission to run, asks "shall I start now or later?" — those are Mode 2 violations. Decide from evidence; log the decision; proceed.
 
 **Gotchas learned (Orbitax platform-tool):**
-- Enter FM via in-app launcher navigation — never `page.goto()` (resets Angular NgRx store → FM grid never mounts).
+- Enter FM via in-app launcher navigation — never `page.goto()` or `Page.navigate()` (resets Angular NgRx store → FM grid never mounts, magic-link hash routes become invalid).
+- **Magic-link detail routes** (`/transmissions/[hash]`, `/my-forms/[hash]`) are session-scoped tokens — they CANNOT be navigated to via URL. Must click the link from within the live grid (in-app navigation only). The capture script must: launcher → tool → grid → click row link.
 - `fieldSections` fires only on FM module's FIRST load in a session — warm re-visits use cached columns.
 - Attach the network interceptor BEFORE any navigation.
 - The grid's full column set is in `fieldSections`, NOT the rendered DOM — hidden columns surface only via the config diff.
 - `playwright-core` and `puppeteer-core` both fail with Chrome ≥ 149 (`Network.enable` times out). Use `chrome-remote-interface` (Runtime only) + client-side XHR/fetch interceptor.
-- All interactive clicks in the Angular app require `dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true,view:window}))` — `.click()` on the JS element or puppeteer's `page.click()` may not propagate through Angular's event system.
-- External links in the app DOM (e.g. help.orbitax.com from welcome dialog) will navigate the tab away and break the session if clicked. Always filter `querySelectorAll('a')` to `href.includes('localhost:9000')` for in-app navigation.
+- All interactive clicks in the Angular app require `dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true,view:window}))` — `.click()` or puppeteer's `page.click()` may not propagate through Angular.
+- External links in the app DOM will navigate the tab away and break the session. Filter `querySelectorAll('a')` to `href.includes('localhost:9000')` for in-app navigation.
+- Guided tour ("Next/Finish" buttons) intercepts "Continue to Orbitax" — click Finish via dispatchEvent FIRST, then Continue.
+- The `hasUserConfirmedOnBoarding` sessionStorage key controls the splash. Angular overrides it during init — pre-setting it via `evaluateOnNewDocument` is unreliable.
+
+**FM navigation sequence (working):**
+```
+1. Connect to CDP (chrome-remote-interface, Runtime only)
+2. Install XHR/fetch interceptor via Runtime.evaluate
+3. Check for splash ("Continue to Orbitax") → dispatchEvent click Finish, then Continue
+4. Wait for FM nav: button[aria-label] present
+5. Launcher → dispatchEvent click launcher button → wait 2s
+6. Click "Filing Manager" text → wait 5-8s (FM module cold loads)
+7. Dismiss welcome dialog (Done / Don't Show Again)
+8. Click target tab (a.menu-item-dropdown text match) → wait 8s
+   - Library, My Forms: direct a.menu-item-dropdown click
+   - Transmissions: click "More" first, then button text "Transmissions"
+9. For detail pages: click row link (td a or td button matching RPT-/Form-) → wait 8s
+10. Read DOM via Runtime.evaluate
+```
+
+**Next.js rebuild pipeline (per screen):**
+```
+feature-learner (capture + Coverage Oracle) 
+  → data/[screen].json fixture 
+  → app/filing-manager/[screen]/page.tsx 
+  → imports Shell + Breadcrumb + DataGrid + cell renderers
+  → TypeScript check (npx tsc --noEmit)
+  → git commit
+```
+
+**Reusable cell renderers built (ITP webclient):**
+| cellViewer | Component | File |
+|---|---|---|
+| CountryWithFlagCellViewerComponent | CountryCell | cells/CountryCell.tsx |
+| HyperlinkCellViewerComponent + HyperlinkWithActionIconsCellViewerComponent | HyperlinkCell | cells/HyperlinkCell.tsx |
+| TransmissionStatusCellViewerComponent | StatusCell | cells/StatusCell.tsx |
+| FormPublicationStatusCellViewerComponent | PubStatusCell | cells/PubStatusCell.tsx |
+| ActionsCellViewer | ActionsCell | cells/ActionsCell.tsx |
+| EntityCellViewer | EntityCell | cells/EntityCell.tsx |
+| LocalDateCellViewerComponent | LocalDateCell | cells/LocalDateCell.tsx |
+| EditStringCellViewerComponent | EditStringCell | cells/EditStringCell.tsx |
+| FilingManagerWorkflowCellViewerComponent | WorkflowCell | cells/WorkflowCell.tsx |
+| StringCellViewer / StringCellViewerComponent | (plain text — no component) | inline in DataGrid |
 
 **Coverage semantics (important):** a column is COVERED when its config definition (`cellViewer`, type,
 options) is captured — rendering it is NOT required to rebuild it. `reconcile` credits column→has-cellViewer,
