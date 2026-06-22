@@ -207,18 +207,38 @@ renders 10 columns while the server declares 17). The oracle finds gaps WITHOUT 
 Three sources of truth: **server config (denominator)**, **DOM crawler**, **code grep**. A gap = anything
 in any source not driven/captured. Run these scripts (from `tools/`, Chrome on CDP :9222):
 
-1. **Capture** — `node tools/config-capture.js ["<SubTab>"]` enters the tool via the app launcher
-   (forces a COLD load so column defs fire), then saves XHR/fetch response **bodies** (incl request
-   postData) to `out/config/`. Structural bodies: graphql `fieldSections`, `Platform/Command`,
-   `DynamicGridData`, `/api/Query`.
+1. **Capture** — `node tools/capture-cdp.js` (preferred) OR `node tools/config-capture.js ["<SubTab>"]`
+   enters the tool via the app launcher, then saves XHR/fetch response **bodies** to `out/config/`.
+   Structural bodies: `FilingManagerApi` fieldSections, `Platform/Command`, `DynamicGridData`, `/api/Query`.
+   - **Use `capture-cdp.js` for Chrome ≥ 149** — it uses `chrome-remote-interface` (Runtime domain only)
+     with a client-side XHR/fetch interceptor. Never `playwright-core` or `puppeteer-core` — both call
+     `Network.enable` on connect, which times out on Chrome 149.
+   - **Capture sequence (FM):** splash dismiss → launcher click → "Filing Manager" → Library tab →
+     My Forms tab → More dropdown → Transmissions button. All clicks use
+     `dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true,view:window}))` — NOT `.click()`.
+   - **Never `page.goto(route)`** for FM captures — fresh Angular boot has empty NgRx store, so the FM
+     grid never mounts and fieldSections never fires. Navigate in-app only.
+   - **Never click external links** as "navigate away" — filter to `localhost:9000` hrefs only.
+   - **FM tab selectors:** `a.menu-item-dropdown` with text matching the tab. NOT `a[title="Library"]`.
+     Transmissions is under the **More** dropdown (`button.mat-mdc-menu-item` text "Transmissions").
+   - **Splash dismiss:** `dispatchEvent(MouseEvent)` on "Continue to Orbitax" button ONLY after guided
+     tour is dismissed ("Finish" button, also via dispatchEvent). Do NOT click "Finish" from puppeteer's
+     page.click() — it is not interactable from puppeteer.
+   - **Captured files** must be named `fieldSections-*.json` for `build-manifest.js` to find them. If
+     captured with a different prefix (e.g. `fm-fieldSections-*.json`), rename before running manifest.
+   - **FM sourceTypes** (Orbitax ITP): Library = `FM-Library`, My Forms = `FM-FilingForms`,
+     Transmissions = `FilingManager-Transmission`.
 2. **Manifest** — `node tools/build-manifest.js ["<SourceType>"]` flattens config into coverage targets
    (`out/manifest.json`): tabs, columns (+cellViewer/canFilter/hasDetails), filters, toolbar items,
-   widgets. Pass the tool's `sourceType` (e.g. `FM-FilingForms`) to scope to ONE screen — a cold load
-   fires many tools' fieldSections, so scoping is required for a per-feature manifest.
+   widgets. Pass the tool's `sourceType` to scope to ONE screen — a cold load fires many tools'
+   fieldSections, so scoping is required for a per-feature manifest.
 3. **Reconcile** — `node tools/reconcile.js` drives each undriven target (bounded: ≤3 passes, stop at
    95% or no-progress), interleaves a DOM crawler (adds client-only controls), and applies the
    commit-guard (never Save/Submit/Apply/Create/Delete/Sign out). Writes driven/evidence/reason back
    to the manifest.
+   - **Config-only shortcut:** if all declared targets are columns with `cellViewer` or filters
+     (no tabs/widgets), run `node tools/reconcile-config-only.js` instead — credits everything from
+     config definition alone, no browser required. Safe when the feature has no tab/widget targets.
 4. **Map + critic (parallel read-only agents, no browser)** — one agent per feature maps each declared
    element to a component `path:line` (source 3 = code) and flags declared-but-no-code /
    code-but-not-declared; one critic agent answers "what's missing?". Agents write `out/findings-*.md`.
@@ -236,14 +256,25 @@ After `coverage-report.js` writes `coverage.md`, if the residual list is non-emp
 2. Invoke `/dual-verify-orchestrator` with `out/dual-verify-seed.md` as the seed. **Mode 2 — autonomous. No questions. Decide from evidence.**
 3. The orchestrator's A↔B loop answers each gap from the webclient source, updates `CONTEXT.md`, resolves CONFLICTs only if genuine.
 4. Output: `out/coverage-enriched.md` (gaps resolved + code evidence + domain context).
-5. **STOP.** Surface `coverage-enriched.md` to the user. Do not build anything. Do not propose fixes. The user decides what to build next.
+5. **Carry on — no user gate.** `coverage-enriched.md` is the audit trail; the pipeline continues.
+   - **Residual non-empty:** dual-verify's A↔B loop and plan-executor have already been invoked
+     (steps 2–3 above). `plan-executor` + `execution-verifier` run to completion (max 3 passes).
+     **STOP only on:** CONFLICT (two verified sources disagree, no code resolution) OR
+     `audit-report.md` = COMPLETE (all tasks Done).
+   - **Residual empty (100% coverage):** log
+     `"Coverage complete — no residual gaps. No dual-verify seed needed."` and halt cleanly.
+     Do not invoke dual-verify with an empty seed.
 
 **What Stage F never does:** asks which approach to take, asks permission to run, asks "shall I start now or later?" — those are Mode 2 violations. Decide from evidence; log the decision; proceed.
 
-**Gotchas learned (Orbitax platform-tool):** enter the tool via the launcher solution every time (a
-warm tab-click or URL-restore reuses cached columns and won't re-fire `fieldSections`); attach the
-network listener BEFORE any reload; the grid's full column set is in `fieldSections`, NOT the rendered
-DOM — hidden columns surface only via the config diff (this is the whole point).
+**Gotchas learned (Orbitax platform-tool):**
+- Enter FM via in-app launcher navigation — never `page.goto()` (resets Angular NgRx store → FM grid never mounts).
+- `fieldSections` fires only on FM module's FIRST load in a session — warm re-visits use cached columns.
+- Attach the network interceptor BEFORE any navigation.
+- The grid's full column set is in `fieldSections`, NOT the rendered DOM — hidden columns surface only via the config diff.
+- `playwright-core` and `puppeteer-core` both fail with Chrome ≥ 149 (`Network.enable` times out). Use `chrome-remote-interface` (Runtime only) + client-side XHR/fetch interceptor.
+- All interactive clicks in the Angular app require `dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true,view:window}))` — `.click()` on the JS element or puppeteer's `page.click()` may not propagate through Angular's event system.
+- External links in the app DOM (e.g. help.orbitax.com from welcome dialog) will navigate the tab away and break the session if clicked. Always filter `querySelectorAll('a')` to `href.includes('localhost:9000')` for in-app navigation.
 
 **Coverage semantics (important):** a column is COVERED when its config definition (`cellViewer`, type,
 options) is captured — rendering it is NOT required to rebuild it. `reconcile` credits column→has-cellViewer,
