@@ -319,6 +319,29 @@ feature-learner (capture + Coverage Oracle)
 | FilingManagerWorkflowCellViewerComponent | WorkflowCell | cells/WorkflowCell.tsx |
 | StringCellViewer / StringCellViewerComponent | (plain text — no component) | inline in DataGrid |
 
+**Visual Fidelity Rules (ITP FM rebuild — from 2026-06-22 gap analysis):**
+
+When building any ITP FM screen, these must match the real app exactly:
+
+| Element | Correct value | Common mistake |
+|---|---|---|
+| Active nav tab | `color: var(--standard-0)` + class `itp-nav-tabs__item--active` via `usePathname()` | No active class → all tabs same color |
+| Alerts panel notification dot | Colored 8px circle left of title: amber=#FF8B00 (analytics), green=#00C237 (workflow), blue=#0065FF (scenario) | Missing dot |
+| Alerts panel action | Outlined pill button `border: 1px solid var(--standard-1000); border-radius: 100px` | Plain text link |
+| Alerts panel date | On its own line above the action button | Inline with action |
+| Avatar menu items | No FA icons on items. "Switch company" = subtitle under name. Only Sign out has icon. | Adding icons to all items |
+| Project selector folder | `fa-regular fa-folder` before each recent project name | No icon |
+| Project selector View All | In section header right-aligned | At bottom with divider |
+| Project selector Edit icon | `fa-regular fa-gear` | `fa-regular fa-pen` |
+
+**Visual gap analysis pipeline:**
+1. Run `capture-cdp.js` or `visual-diff.js` to screenshot rebuild + real app at same viewport (1440×900)
+2. Read screenshots with Claude image Read tool
+3. Produce `docs/reports/YYYY-MM-DD-visual-gap-report.md` — structured table with region/real/rebuild/gap/fix
+4. Apply fixes to CSS/component files
+5. Re-screenshot to verify
+6. Update both skills with new visual rules found
+
 **Coverage semantics (important):** a column is COVERED when its config definition (`cellViewer`, type,
 options) is captured — rendering it is NOT required to rebuild it. `reconcile` credits column→has-cellViewer,
 filter→column-canFilter, widget→declared-in-config; `renderObserved` separately flags whether the live
