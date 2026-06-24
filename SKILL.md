@@ -632,6 +632,79 @@ Print the full path of the written report and a 2–3 line summary. Do **not** t
 
 ---
 
+---
+
+## Pre-Seed Evidence Scan (NEW — 2026-06-24)
+
+**Purpose:** Find ALL screens and interactions BEFORE writing a seed prompt — including:
+grid row detail pages, status-dependent routes, dropdown items, feature flag screens.
+Uses 3 sources: Angular frontend source, backend API source, live browser CDP.
+
+**When to run:** Before writing any research seed. Run AFTER `launch-app.js` and AFTER navigating to the solution's main screen. Output feeds directly into seed writing.
+
+**Command:**
+```
+node tools/pre-seed-scan.js <solution> <feature-folder-name>
+# e.g.: node tools/pre-seed-scan.js filing-manager filing-manager
+```
+
+### Source 1 — Angular source grep
+
+Reads `orbitax-dashboard-webclient_fork/src/app/features/<solution>/`. Extracts:
+
+| Pattern to grep | Finds |
+|---|---|
+| `router.navigate` | Status-dependent route navigation |
+| `status.*===.*'` | Conditions that change behavior by status |
+| `FeatureFlag`, `featureToggle`, `isFeatureEnabled` | Hidden screens behind flags |
+| `additionalCommands[` | Magic link navigation targets |
+| `<solution>.routes.ts` | All declared route paths |
+
+### Source 2 — Backend API grep
+
+Reads `orbitax-internal-api_fork`. Extracts:
+- `MagicLinkCommand`, `CommandType` → reveals commands each screen can execute
+- `FeatureFlag`, `featureKey` → reveals flag keys that gate screens
+
+### Source 3 — Browser CDP clicks
+
+Drives the live app at `:9222`:
+- Clicks 3 rows in every grid → records ROUTE_CHANGE / DRAWER / MODAL / GRID_ONLY per row
+- Opens every dropdown → lists all items
+- Normalizes magic link IDs to `[id]` pattern
+
+### Output: `tools/out/pre-seed/<solution>/evidence.json`
+
+```json
+{
+  "summary": {
+    "confirmed_detail_routes": ["/filing-manager/library/[id]"],
+    "drawer_behaviors": 0,
+    "grid_only_behaviors": 2,
+    "dropdown_items_found": ["Actions"],
+    "feature_flags_detected": true,
+    "status_dependent_navigation": true
+  },
+  "angular_source": { "router_navigate_calls": [...], "feature_flags": [...] },
+  "backend_api": { "magic_link_commands": [...] },
+  "browser": { "grid_row_destinations": {...}, "dropdown_items": {...} }
+}
+```
+
+### After scan: write seed from evidence
+
+Claude reads `evidence.json` → writes `seed-prompt-<solution>-research.md` with:
+- All confirmed routes (including `[id]` routes found by clicking)
+- Status-dependent navigation noted (same route, different UI state)
+- Feature-flagged screens documented as `UNVERIFIED_FEATURE_FLAG` (can't visit without right account)
+- Dropdown items known before research starts
+
+### What remains unresolvable
+
+- **Feature-flagged screens** that require a different user account / tenant to view — document as `UNVERIFIED_FEATURE_FLAG`, note which flag key controls them, mark for manual verification.
+
+---
+
 ## Route Discovery Mode (NEW — 2026-06-24)
 
 **Purpose:** Auto-discover ALL routes for a solution BEFORE writing a seed prompt.
