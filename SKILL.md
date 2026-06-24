@@ -339,6 +339,23 @@ After `coverage-report.js` writes `coverage.md`, if the residual list is non-emp
 
 - App: `http://localhost:9000` — Orbitax ITP dashboard-webclient (Angular SPA)
 - No authentication required — app loads without login
+
+**AUTO-LAUNCH (run this FIRST before any research — fully automated):**
+```
+node tools/launch-app.js
+```
+This script (at `dual-verify-swarm/tools/launch-app.js`) does everything:
+1. Kills all existing Chrome processes
+2. Launches Chrome with `--remote-debugging-port=9222 --user-data-dir=C:\temp\cdp-debug`
+3. Connects via chrome-remote-interface
+4. Dismisses guided tour ("Finish" button)
+5. Waits up to 90s for "Continue to Orbitax" to turn blue, then clicks it
+6. Waits for app to mount (`button[aria-label]` present)
+7. Dismisses welcome dialog if present
+8. Prints `✅ APP READY` when done
+
+**Never ask the user to manually launch Chrome or dismiss the splash — run `node tools/launch-app.js` instead.**
+
 - Splash sequence on EVERY fresh Chrome launch:
   1. Guided tour appears (8 steps) — click "Finish" button via dispatchEvent
   2. "Continue to Orbitax" button appears but is DISABLED (greyed out)
