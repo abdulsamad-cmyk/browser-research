@@ -124,6 +124,20 @@ actually works, grounded in observed network calls and real `path:line` referenc
 All read-only — observe and learn, never edit. The running app defaults to `http://localhost:9000`
 (confirm the URL with the user if different).
 
+## API Repo Scope
+
+`C:\Workstation\orbitax-internal-api_fork` — READ-ONLY. When a component is server-driven (banner, promo, config-driven content) and does not appear in the live DOM during capture:
+
+1. Search the API repo for the relevant model/endpoint (search by component name, e.g. "LibraryBanner", "banner", "FilingManager")
+2. Note the data shape (field names, types)
+3. Create a fixture in `projects/itp/app/webclient/data/` with realistic sample data
+4. Build the component using the fixture
+
+Common patterns:
+- `fieldValues['BannerList']` — server-pushed content blocks
+- `FormsLibraryBannerQuery` — FM library banner
+- Any `Query` suffix type in the API = data fetched on page load
+
 ### Hard rules
 
 - **Playwright only** (not the Chrome plugin) for the running app. Connect over CDP to a
@@ -267,6 +281,48 @@ After `coverage-report.js` writes `coverage.md`, if the residual list is non-emp
 
 **What Stage F never does:** asks which approach to take, asks permission to run, asks "shall I start now or later?" — those are Mode 2 violations. Decide from evidence; log the decision; proceed.
 
+---
+
+## Shell / Header Architecture (ITP Next.js webclient)
+
+- `Shell.tsx` no longer accepts `sidebarContent` prop — replaced by `detailsContent` + 4-panel system
+- `SidebarPanel = "details" | "activity" | "alerts" | "chat" | null`
+- `activePanel` state lives in `Shell.tsx`, starts `null` (sidebar closed)
+- Clicking a header icon button sets `activePanel` to that panel's key; clicking the same button again sets it to `null` (closes sidebar)
+- Sidebar title text changes to match the active panel name
+
+### Side panel components
+
+| Component file | Notes |
+|---|---|
+| `ActivityPanel/ActivityPanel.tsx` | "Edit History" \| "Data Tracing" tabs; empty state when no data |
+| `ChatPanel/ChatPanel.tsx` | Empty state: "No active conversations." |
+| `AlertsPanel/AlertsPanelInline.tsx` | Same data as AlertsPanel portal but rendered inline (no portal, no backdrop) |
+| `AppLauncher/AppLauncher.tsx` | Full-width popup, 2-panel: Platform Tools left + 3-tab main apps right |
+| `AppLauncher/apps.ts` | Data module: `PLATFORM_CATEGORIES`, `PLATFORM_SETTINGS`, `APP_LIST` (3 categories) |
+
+### Real app panel sources (from webclient capture)
+
+| Panel | Angular component | Notes |
+|---|---|---|
+| Details | FMGuide content | Falls back to "No details available" when no row selected |
+| Activity | `ActivityFeedComponent` | "Edit History" + "Data Tracing" tabs |
+| Alerts | `NotificationSideBarComponent` | Notification list |
+| Chat | `ConversationListComponent` | Empty state when no conversations |
+
+---
+
+## CDP Technique Learnings
+
+- `document.querySelector('button[aria-label="X"]')` fails inside Node template literals due to quote escaping — use array find instead:
+  ```js
+  [...document.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === label)
+  ```
+- `Input.dispatchMouseEvent` requires `window.focus()` first to register React synthetic click events
+- CDP tool call is `Input.dispatchMouseEvent` — `Input.enable()` does **not** exist in `chrome-remote-interface` (calling it throws)
+
+---
+
 **Gotchas learned (Orbitax platform-tool):**
 - Enter FM via in-app launcher navigation — never `page.goto()` or `Page.navigate()` (resets Angular NgRx store → FM grid never mounts, magic-link hash routes become invalid).
 - **Magic-link detail routes** (`/transmissions/[hash]`, `/my-forms/[hash]`) are session-scoped tokens — they CANNOT be navigated to via URL. Must click the link from within the live grid (in-app navigation only). The capture script must: launcher → tool → grid → click row link.
@@ -361,6 +417,73 @@ When a topic is in play, search the local codebase (Grep / Glob / Read) for file
 
 (In Feature Learning Mode this step is covered by pipeline stages 2–3 above.)
 
+---
+
+## Depth-2 Audit Protocol (NEW — 2026-06-23)
+
+After any ITP solution is built, run a Depth-2 Audit before marking it done. Drives both apps simultaneously:
+- Real app `localhost:9000` (Angular — ground truth)
+- Rebuild `localhost:3200` (Next.js — what was built)
+
+### 8 Audit Dimensions (run for EVERY screen)
+
+| # | Dimension | Capture method |
+|---|---|---|
+| 1 | **Grid row drill-down** | Click **3 rows** per grid screen. Detect per row: ROUTE_CHANGE / DRAWER / MODAL / GRID_ONLY |
+| 2 | **Dropdown drill-down** | Open every dropdown, mat-menu, BreadcrumbActionsMenu, More nav. List all items. Do NOT click destructive (Delete/Remove/Discard/Sign Out) |
+| 3 | **Button drill-down** | Every bc-right button + content button. Click → route / modal / action / nothing per button |
+| 4 | **Tab drill-down** | Every tab strip, sub-tabs, SegmentedControl. Click each tab → record content loaded |
+| 5 | **Sidebar functional** | Click each header icon: Details / Activity / Alerts / Chat / XatBot. Does panel open? Content correct? |
+| 6 | **Library visual+functional** | Screenshot real vs rebuild. Column diff. Image/card clicks → landing route. Welcome dialog present? Filters filter the grid? |
+| 7 | **Interactive elements** | Form-group chips, nav tiles, segmented controls → filter applied / route navigated / no-op |
+| 8 | **Breadcrumb verification** | bc-left items (icon + links + current page label) + bc-right controls. Compare real vs rebuild. Flag ANY mismatch. |
+
+### CDP patterns for audit
+
+```js
+// keepAlive — MUST start BEFORE splash dismissal, runs every 3s
+const keepAlive = setInterval(async () => {
+  const btn = [...document.querySelectorAll('button')].find(b => b.textContent.includes('Stay'));
+  if (btn) btn.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+}, 3000);
+
+// Click row N in a grid
+const rows = document.querySelectorAll('table tbody tr, [role="row"]:not([role="columnheader"])');
+rows[N].dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+
+// Detect what happened after row click
+JSON.stringify({
+  url: window.location.href,
+  hasDrawer: !!document.querySelector('.mat-drawer-opened,[class*="drawer"][class*="open"]'),
+  hasModal: !!document.querySelector('.mat-dialog-container,[role="dialog"]')
+});
+
+// Back navigation — ALWAYS use breadcrumb link, NEVER browser.back() or Page.navigate()
+const bc = document.querySelector('[class*="breadcrumb"] a[href*="<solution-route>"]');
+bc.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+```
+
+### Gap report format
+
+```markdown
+| Screen | Dimension | Element | Real App | Rebuild | Gap | Priority |
+|---|---|---|---|---|---|---|
+| Global Filing | D1 Grid row | Row 0 click | Drawer opened | No handler | MISSING | HIGH |
+| Library | D6 Visual | Columns | [list] | [different list] | Mismatch | HIGH |
+| All | D8 Breadcrumb | Parent link | /due-date-tracker | /due-date-tracker/global | Wrong href | HIGH |
+```
+
+Priorities: **HIGH** = missing entirely | **MEDIUM** = present but wrong | **PASS** = matches real app | **SKIP** = intentional stub.
+
+### Verified DDT audit learnings (2026-06-23)
+
+- **Breadcrumb parent link bug:** All DDT sub-pages incorrectly linked "Due Date Tracker" to `/due-date-tracker/global` instead of `/due-date-tracker`. Always verify parent `href` in breadcrumb — it must go to the solution dashboard, not another sub-page.
+- **Library page minimum:** Every solution Library page needs: LibraryBanner + SegmentedControl in bc-right + form-group filter chips (wired) + welcome dialog (localStorage) + solution-specific fixture + solution-labeled action button.
+- **Sidebar stubs:** Plain `<p>` text in `detailsContent` = stub. Real sidebar needs a 4-step guide component with numbered badges.
+- **Grid rows — 1 is not enough:** Research seeds that only click 1 row miss variation (row 2/3 may trigger different behavior). Always click 3.
+- **CRI install:** `chrome-remote-interface` must be installed in `tools/` before audit scripts can run: `cd tools && npm install chrome-remote-interface`
+- **Node REPL vs script:** Run audit scripts with `node path/to/script.js` from command line — NOT from inside `node` REPL.
+
 ### 5. Write the report
 
 Write to `docs/reports/YYYY-MM-DD-<topic>.md` (slugify the topic; create the directory if missing). Use this structure:
@@ -440,6 +563,78 @@ Anything not verified against a captured call or a real `path:line`.
 ### 6. Report back
 
 Print the full path of the written report and a 2–3 line summary. Do **not** take further action — the user decides what happens next.
+
+## Skill Blind Spots
+
+These gaps are NOT caught by text/DOM capture — require additional investigation:
+
+1. **Interactive states** — Kendo dropdowns, hover menus, click-triggered overlays only appear after interaction. Static DOM capture misses them. Fix: add explicit interaction steps (click column header, wait 500ms, capture state).
+
+2. **CSS visual style vs data** — Skill captures data correctly but not HOW it renders. Tab-style vs pill chips look the same in text but completely different visually. Fix: always screenshot-compare the specific region, not just full-page.
+
+3. **Server-driven optional components** — Banners, promotional content, data-driven sections only appear when the API returns data. Fix: read `orbitax-internal-api_fork` to find the data shape and endpoint, then create a fixture in `data/`.
+
+## Mandatory Capture Protocol
+
+Every DRIVE phase (Phase 1) MUST follow this protocol. Ad-hoc `sleep(N)` patterns are BANNED — use the helpers below.
+
+### Setup (always first)
+```js
+const { CaptureSession } = require('./capture-session');
+const session = new CaptureSession();
+await session.connect(9222, 'localhost:9000');
+session.startKeepAlive();        // ← MUST be first, before any navigation
+await session.dismissSplash();   // waits up to 60s for enabled button
+await session.dismissTour();     // clears guided tour (up to 10 steps)
+```
+
+### Per-screen capture loop
+```js
+// 1. Navigate (in-app click or Page.navigate if not an SPA route)
+await session.clickNavByText('Global Filing');
+
+// 2. Wait for stable DOM (replaces sleep)
+await session.pollForStable('Global Filing', 12000);
+
+// 3. Screenshot
+await session.screenshot('gmt-global', 'real');
+
+// 4. Auto zone inventory
+const zones = await session.autoZoneInventory();
+// zones = { 'bc-left', 'bc-right', 'content-header', 'content-body-top', 'sidebar' }
+
+// 5. Write zone inventory to ledger
+```
+
+### Cleanup (always last)
+```js
+session.stopKeepAlive();
+await session.close();
+```
+
+### Navigation hierarchy
+1. App launcher tile click (first entry into a solution app)
+2. `session.clickNavByText(label)` for visible nav items
+3. More dropdown: click More → `clickNavByText(itemLabel)` after dropdown opens
+4. NEVER use `Page.navigate()` for in-session SPA navigation — resets Angular NgRx store
+
+### Zone inventory format (per layout-matrix.md)
+Each captured screen MUST record:
+| Zone | Contents |
+|---|---|
+| bc-left | (from `autoZoneInventory()`) |
+| bc-right | (from `autoZoneInventory()`) |
+| content-header | (from `autoZoneInventory()`) |
+| content-body-top | (from `autoZoneInventory()`) |
+| sidebar | (from `autoZoneInventory()`) |
+
+### Maps — systematic 3-step source walk
+For each screen (run in parallel agents, no browser needed):
+1. Read `<solution>.routes.ts` → find path → identify component class
+2. If `PlatformLinkCreatorComponent`: grep for `sourceType` near the command class → trace to `fieldSections` query → find API base config key
+3. If direct component: read `.component.ts` → find `@Injectable` services → find `http.get/post` calls → record `path:line`
+
+4. **Licensed component internals** — Kendo UI, Angular Material components generate complex DOM. The skill sees the outer container but not the full rendered behavior. Fix: read the Angular source for the component template + CSS to understand what it renders.
 
 ## Boundaries
 
