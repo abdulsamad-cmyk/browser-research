@@ -340,6 +340,14 @@ After `coverage-report.js` writes `coverage.md`, if the residual list is non-emp
 - App: `http://localhost:9000` — Orbitax ITP dashboard-webclient (Angular SPA)
 - No authentication required — app loads without login
 
+**VIEWPORT: Always use 1920×1080 — NEVER 1440×900.**
+The ITP app is designed for 1920px wide monitors. At 1440px some nav items collapse into "More" dropdowns and right-side panels get clipped. All CDP captures, screenshots, and parity comparisons must use 1920×1080.
+
+Set in every CDP script:
+```js
+await Page.setDeviceMetricsOverride({ width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false });
+```
+
 **AUTO-LAUNCH (run this FIRST before any research — fully automated):**
 ```
 node tools/launch-app.js
