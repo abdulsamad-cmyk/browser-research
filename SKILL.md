@@ -747,6 +747,191 @@ Write `dual-verify-swarm/seed-prompt-<solution>-research.md` with:
 
 ---
 
+---
+
+## Complete Interaction Capture Protocol (NEW — 2026-06-24)
+
+**Purpose:** Capture EVERY interaction on every screen — including hidden DOM elements,
+hover states, tooltips, dropdowns, modals, right-click menus, and conditionally-rendered content.
+Uses Angular source as the ground truth for what interactions exist, then drives browser to capture each one.
+
+**When to use:** During any research run, before building or auditing a screen.
+Replace the ad-hoc DRIVE depth checklist with this systematic 3-phase protocol.
+
+---
+
+### Phase 1 — Source Manifest (Angular templates → interaction inventory)
+
+For each screen, find the Angular component's `.component.html` file in:
+`orbitax-dashboard-webclient_fork/src/app/features/<solution>/`
+
+Extract ALL interaction declarations using Grep:
+
+| Interaction type | Angular HTML pattern to grep |
+|---|---|
+| Click | `(click)=` |
+| Hover | `(mouseenter)=`, `(mouseover)=`, `(mouseleave)=` |
+| Right-click | `(contextmenu)=` |
+| Tooltip | `[matTooltip]=`, `[title]=`, `[kendoTooltip]=`, `kendoTooltipTemplate` |
+| Dropdown menu | `[matMenuTriggerFor]=`, `mat-menu`, `kendo-dropdownlist`, `kendo-combobox`, `kendo-multiselect` |
+| Kendo popup | `kendo-popup`, `[kendoPopupAnchor]` |
+| Modal / dialog | `MatDialog.open(`, `mat-dialog-content`, `[kendoDialogComponent]` |
+| Overlay | `[cdkOverlayOrigin]`, `cdk-overlay-container` |
+| Hidden elements | `*ngIf=`, `[hidden]=`, `[style.display]=`, `[@` (Angular animations) |
+| Drag & drop | `cdkDrag`, `(cdkDropListDropped)=` |
+| Keyboard | `(keydown)=`, `(keyup)=`, `(keypress)=` |
+
+Write `tools/out/interaction-manifest/<solution>/<screen>.json`:
+```json
+[
+  { "element": "Export button", "type": "click", "handler": "onExport()", "selector": "button[aria-label='Export']", "captured": false },
+  { "element": "Publication status circle", "type": "hover", "tooltip_declared": "[matTooltip]='tooltipText'", "captured": false },
+  { "element": "Row right-click", "type": "contextmenu", "handler": "onContextMenu($event)", "captured": false },
+  { "element": "Actions menu", "type": "dropdown", "trigger": "[matMenuTriggerFor]='actionsMenu'", "items": null, "captured": false },
+  { "element": "Add form modal", "type": "modal", "trigger_text": "Add to My Forms", "captured": false },
+  { "element": "Hidden validation panel", "type": "conditional", "condition": "*ngIf='hasErrors'", "how_to_reveal": "trigger a validation error", "captured": false }
+]
+```
+
+---
+
+### Phase 2 — Browser Driving (trigger every manifest entry via CDP)
+
+For each entry in the manifest, trigger it and capture the result:
+
+**Click:**
+```js
+el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+await sleep(1000);
+// screenshot + DOM capture
+```
+
+**Hover (tooltip):**
+```js
+await c.Input.dispatchMouseEvent({type:'mouseMoved', x:el.x, y:el.y});
+await sleep(1500); // wait for tooltip to appear
+const tooltip = document.querySelector('[role="tooltip"], .mat-mdc-tooltip, .k-tooltip');
+// capture tooltip text
+await c.Input.dispatchMouseEvent({type:'mouseMoved', x:0, y:0}); // move away to dismiss
+```
+
+**Right-click (context menu):**
+```js
+await c.Input.dispatchMouseEvent({type:'mousePressed', x, y, button:'right', buttons:2, clickCount:1});
+await sleep(500);
+await c.Input.dispatchMouseEvent({type:'mouseReleased', x, y, button:'right', buttons:0, clickCount:1});
+await sleep(800);
+// capture context menu items
+const items = [...document.querySelectorAll('[role="menuitem"], .context-menu-item, .mat-menu-item')]
+  .map(el => el.textContent.trim());
+// close with Escape
+await c.Input.dispatchKeyEvent({type:'keyDown', key:'Escape', code:'Escape', keyCode:27});
+```
+
+**Dropdown / mat-menu:**
+```js
+// click trigger
+el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+await sleep(500);
+// capture ALL items (text + disabled state)
+const items = [...document.querySelectorAll('[role="menuitem"], .mat-menu-item, .k-item')]
+  .map(el => ({ text: el.textContent.trim(), disabled: el.hasAttribute('disabled') || el.classList.contains('k-disabled') }));
+// close
+document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}));
+```
+
+**Modal / mat-dialog:**
+```js
+// click trigger button
+el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+await sleep(1000);
+// capture modal content (title, fields, buttons)
+const modal = document.querySelector('.mat-mdc-dialog-container, [role="dialog"], .k-dialog');
+const content = modal ? modal.innerText : 'NO MODAL FOUND';
+// CLOSE — never click Save/Submit/Apply/Create/Delete
+const cancelBtn = modal?.querySelector('button[mat-dialog-close], button:last-of-type');
+if (cancelBtn) cancelBtn.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+else document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}));
+```
+
+**Kendo popup / dropdown:**
+```js
+// click Kendo trigger (often a button or input)
+el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+await sleep(600);
+const kendoItems = [...document.querySelectorAll('.k-list-item, .k-item, .k-popup li')]
+  .map(el => el.textContent.trim());
+// close by clicking outside
+document.body.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+```
+
+**Conditional / hidden element:**
+```js
+// Check if condition is currently met
+const el = document.querySelector(selector);
+if (!el) {
+  // Log: "UNVISITED — condition not met (${condition}). How to reveal: ${how_to_reveal}"
+  manifest[i].captured = false;
+  manifest[i].note = 'condition not met during this session';
+} else {
+  // trigger and capture normally
+}
+```
+
+After each interaction: mark `manifest[i].captured = true`, save screenshot to `tools/out/<solution>/<screen>/<interaction-type>-<element-slug>.png`.
+
+---
+
+### Phase 3 — Coverage Receipt
+
+After all manifest entries attempted, write `tools/out/interaction-manifest/<solution>/<screen>-coverage.md`:
+
+```markdown
+## Interaction Coverage Receipt — <screen>
+
+### CAPTURED (n)
+| Element | Type | Result |
+|---|---|---|
+| Export button | click | Downloaded file |
+| Publication status circle | hover | Tooltip: "Form Preview Available" |
+| Actions menu | dropdown | Items: Export / Import / Settings |
+| Row right-click | contextmenu | Items: Open / Edit / Delete (not clicked) |
+| Add form modal | modal | Fields: Form Name, Jurisdiction, Filing Year |
+
+### UNVISITED (n) — gaps
+| Element | Type | Why not captured | Action |
+|---|---|---|---|
+| Validation panel | conditional | *ngIf=hasErrors — no errors present in fixture | ADD test fixture with errors |
+| Delete confirm modal | modal | Commit-guarded — never click Delete | DOCUMENTED ONLY |
+
+### NOT IN SOURCE (client-side only, no Angular binding found)
+| Element | Type | Note |
+|---|---|---|
+| Drag-resize column | drag | Kendo grid built-in, no Angular binding |
+```
+
+---
+
+### Safety rules for interaction capture
+
+- **NEVER click:** Save, Submit, Apply, Create, OK/Yes on confirms, Delete, Remove, Discard, Sign Out
+- **ALWAYS close after opening:** Escape or Cancel/X button for every modal/dialog/dropdown
+- **Right-click menus:** list items only — never execute any item
+- **Commit-guarded items:** document they exist + what items are visible, mark `captured: 'DOCUMENTED_ONLY'`
+- **Session timeout:** keepAlive every 3s throughout entire capture session
+
+---
+
+### Integration with Route Discovery
+
+Run Complete Interaction Capture AFTER Route Discovery:
+1. Route Discovery → finds all screens → writes `routes.json`
+2. For each discovered screen: Complete Interaction Capture → writes `<screen>.json` manifest + coverage receipt
+3. All manifests → fed into seed prompt as verified interaction inventory
+4. Seed prompt now includes: SCREENS list (from route discovery) + INTERACTIONS per screen (from capture)
+
+---
+
 ## Skill Blind Spots
 
 These gaps are NOT caught by text/DOM capture — require additional investigation:
