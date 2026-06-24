@@ -564,6 +564,189 @@ Anything not verified against a captured call or a real `path:line`.
 
 Print the full path of the written report and a 2–3 line summary. Do **not** take further action — the user decides what happens next.
 
+---
+
+## Route Discovery Mode (NEW — 2026-06-24)
+
+**Purpose:** Auto-discover ALL routes for a solution BEFORE writing a seed prompt.
+Eliminates manually-missed screens (e.g. `/library/[id]`, card view modes) by driving
+the real app and recording every URL reached through interaction.
+
+**When to invoke:** Before writing any research seed. User says "discover routes for [solution]"
+or "write the [solution] seed prompt" — run Route Discovery Mode first, then write seed from output.
+
+### Step 1 — Write and run the discovery script
+
+Write `tools/route-discovery.js` and run it. The script:
+
+```js
+// tools/route-discovery.js
+// Drives the real app via CDP, clicks everything, records every URL reached.
+// Usage: node tools/route-discovery.js <solution-name> <entry-route>
+// e.g.:  node tools/route-discovery.js filing-manager /filing-manager
+
+const CDP = require('chrome-remote-interface');
+const fs  = require('fs');
+const path = require('path');
+
+const SOLUTION   = process.argv[2];          // e.g. "filing-manager"
+const ENTRY      = process.argv[3];          // e.g. "/filing-manager"
+const OUT_DIR    = path.join(__dirname, 'out', 'route-discovery', SOLUTION);
+const BASE_URL   = 'http://localhost:9000';
+const MAX_DEPTH  = 2;
+
+fs.mkdirSync(OUT_DIR, { recursive: true });
+
+// Default skip patterns — routes that are never rebuilt
+const SKIP_PATTERNS = [
+  'analytics', 'admin', 'playground', 'mapping-playground',
+  'forms-publisher', 'liquid-template', 'elite-form', 'complex-query',
+  '/settings', '/onboarding', 'magic-link', 'link/'
+];
+
+const visited  = new Set();
+const routes   = [];
+const queue    = [{ url: BASE_URL + ENTRY, depth: 0, reached_by: 'entry point' }];
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function run() {
+  const c = await CDP({ port: 9222 });
+  const { Runtime, Page, Input } = c;
+  await Runtime.enable();
+  await Page.enable();
+
+  // keepAlive — prevent 7s session timeout
+  const ka = setInterval(async () => {
+    try {
+      await Runtime.evaluate({ expression:
+        `(function(){ var b=[...document.querySelectorAll('button')].find(b=>b.textContent.includes('Stay')); if(b) b.dispatchEvent(new MouseEvent('click',{bubbles:true})); })()`
+      });
+    } catch {}
+  }, 3000);
+
+  while (queue.length > 0) {
+    const { url, depth, reached_by } = queue.shift();
+    const urlPath = url.replace(BASE_URL, '');
+
+    if (visited.has(urlPath)) continue;
+    if (SKIP_PATTERNS.some(p => urlPath.includes(p))) {
+      routes.push({ route: urlPath, reached_by, status: 'SKIPPED', depth });
+      continue;
+    }
+
+    visited.add(urlPath);
+    console.log(`[depth ${depth}] ${urlPath} (via: ${reached_by})`);
+
+    // Navigate in-app (click breadcrumb or use existing nav)
+    // On first visit, just record the URL — we're already there from clicking
+    routes.push({ route: urlPath, reached_by, status: 'VISITED', depth });
+
+    if (depth >= MAX_DEPTH) continue;
+
+    // Find all clickable elements on this page
+    const { result } = await Runtime.evaluate({
+      expression: `(function() {
+        var links = [...document.querySelectorAll('a[href], [routerLink]')]
+          .map(el => ({ text: el.textContent.trim().substring(0,50), href: el.getAttribute('href') || el.getAttribute('routerLink'), tag: el.tagName }))
+          .filter(l => l.href && l.href.startsWith('/') && !l.href.startsWith('//'));
+
+        var clickables = [...document.querySelectorAll('table tbody tr td a, [class*="hyperlink"], [class*="HyperlinkCell"]')]
+          .slice(0, 3)  // max 3 per page to avoid infinite expansion
+          .map(el => ({ text: el.textContent.trim().substring(0,50), href: el.getAttribute('href'), tag: 'ROW_LINK' }));
+
+        return JSON.stringify([...links, ...clickables]);
+      })()`
+    });
+
+    const clickables = JSON.parse(result.value || '[]');
+    for (const el of clickables) {
+      if (!el.href) continue;
+      const fullUrl = BASE_URL + el.href;
+      const relPath = el.href;
+      if (!visited.has(relPath) && !SKIP_PATTERNS.some(p => relPath.includes(p))) {
+        queue.push({ url: fullUrl, depth: depth + 1, reached_by: `click "${el.text}" (${el.tag})` });
+      }
+    }
+
+    await sleep(1500);
+  }
+
+  clearInterval(ka);
+  await c.close();
+
+  fs.writeFileSync(path.join(OUT_DIR, 'routes.json'), JSON.stringify(routes, null, 2));
+  console.log(`\nRoutes discovered: ${routes.filter(r=>r.status==='VISITED').length}`);
+  console.log(`Output: ${path.join(OUT_DIR, 'routes.json')}`);
+}
+
+run().catch(e => { console.error(e); process.exit(1); });
+```
+
+Run: `node tools/route-discovery.js filing-manager /filing-manager`
+
+### Step 2 — Cross-check with Angular routes.ts
+
+Read the Angular routing file for the solution:
+```
+orbitax-dashboard-webclient_fork/src/app/features/<solution>/<solution>.routes.ts
+```
+
+Compare declared routes vs discovered routes. Write `tools/out/route-discovery/<solution>/coverage-receipt.md`:
+
+```markdown
+## Route Discovery Coverage Receipt — <solution>
+
+### VISITED (clicked + captured)
+| Route | Reached by |
+|---|---|
+| /filing-manager | entry point |
+| /filing-manager/library | click "Library" tab |
+| /filing-manager/library/[id] | click HyperlinkCell in Library grid |
+
+### UNVISITED (in routes.ts but not reached by clicking)
+| Declared route | Reason not reached |
+|---|---|
+| /filing-manager/transmission-tracker | no nav link found |
+| /filing-manager/analytics | deliberately skipped |
+
+### SKIPPED (default skip list)
+| Route | Why |
+|---|---|
+| analytics | admin/internal |
+```
+
+### Step 3 — Human reviews UNVISITED list
+
+Present the coverage receipt to the user. For each UNVISITED route:
+- User decides: ADD to seed (needs research) or SKIP (admin/internal/irrelevant)
+- Add user decisions to `coverage-receipt.md`
+
+### Step 4 — Write seed prompt from routes.json
+
+Read `tools/out/route-discovery/<solution>/routes.json` + coverage receipt.
+Write `dual-verify-swarm/seed-prompt-<solution>-research.md` with:
+- SCREENS list populated from all VISITED + user-approved UNVISITED routes
+- Each screen includes: name, route, is_grid (infer from route pattern), nav (how it was reached)
+- SKIP list from skipped + user-rejected routes
+
+### Safety nets (if discovery misses something)
+
+1. **Angular routes.ts cross-check** — Step 2 catches routes never clicked
+2. **Coverage receipt** — human reviews UNVISITED before seed is finalized
+3. **A↔B verification** — Skill B re-checks Angular source during research and flags missed routes
+4. **Depth-2 D1 drill-down** — clicking grid rows during audit reveals additional [id] routes
+
+### Verified learnings (2026-06-24)
+
+- FM `/library/[id]` was missed by manual seed — only found by clicking HyperlinkCell in Library grid
+- FM Library has TWO modes: grid view (DataGrid) + card view (LibraryCardComponent) — toggle between them
+- `/library/[id]` = LibraryFormPreviewComponent: image gallery, publication status circles, Buy Now/Pre Order button
+- Skip `analytics`, `forms-mapping-playground`, `complex-query-builder`, `liquid-template-designer` — internal tools
+- Magic link IDs in URLs (e.g. `/library/7fbecc1d...`) — generalize to `/library/[id]` in seed
+
+---
+
 ## Skill Blind Spots
 
 These gaps are NOT caught by text/DOM capture — require additional investigation:
