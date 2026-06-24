@@ -335,6 +335,55 @@ After `coverage-report.js` writes `coverage.md`, if the residual list is non-emp
 - Guided tour ("Next/Finish" buttons) intercepts "Continue to Orbitax" — click Finish via dispatchEvent FIRST, then Continue.
 - The `hasUserConfirmedOnBoarding` sessionStorage key controls the splash. Angular overrides it during init — pre-setting it via `evaluateOnNewDocument` is unreliable.
 
+**ITP App Launch — permanent facts (never ask the user to explain these again):**
+
+- App: `http://localhost:9000` — Orbitax ITP dashboard-webclient (Angular SPA)
+- No authentication required — app loads without login
+- Splash sequence on EVERY fresh Chrome launch:
+  1. Guided tour appears (8 steps) — click "Finish" button via dispatchEvent
+  2. "Continue to Orbitax" button appears but is DISABLED (greyed out)
+  3. Wait for button to turn BLUE (enabled) — poll up to 60s
+  4. Click "Continue to Orbitax" via dispatchEvent — this opens the ITP home screen
+  5. Wait for app to mount — poll for `button[aria-label]` presence
+  6. Dismiss any welcome dialog ("Done" or "Don't Show Again")
+- This splash is the entry gate — skip it as a feature, it is NOT product UI
+- Session timeout = 7s inactivity — keepAlive every 3s required throughout entire session
+- NEVER use Page.navigate() or page.goto() to change routes — resets Angular NgRx store
+- Navigate IN-APP only: click nav tabs, launcher tiles, breadcrumb links
+
+```js
+// Splash dismissal (copy-paste ready)
+// Step 1: click Finish on guided tour
+const finishBtn = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Finish');
+if (finishBtn) finishBtn.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+await sleep(2000);
+
+// Step 2-3: wait for "Continue to Orbitax" to turn blue (enabled), then click
+let tries = 0;
+while (tries < 60) {
+  const btn = [...document.querySelectorAll('button')].find(b => b.textContent.includes('Continue to Orbitax'));
+  if (btn && !btn.disabled) {
+    btn.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+    break;
+  }
+  await sleep(1000);
+  tries++;
+}
+
+// Step 4: wait for app to mount
+let mounted = false;
+for (let i = 0; i < 30; i++) {
+  const nav = document.querySelector('button[aria-label]');
+  if (nav) { mounted = true; break; }
+  await sleep(1000);
+}
+
+// Step 5: dismiss welcome dialog if present
+const doneBtn = [...document.querySelectorAll('button')].find(b =>
+  b.textContent.includes('Done') || b.textContent.includes("Don't Show Again"));
+if (doneBtn) doneBtn.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+```
+
 **FM navigation sequence (working):**
 ```
 1. Connect to CDP (chrome-remote-interface, Runtime only)
